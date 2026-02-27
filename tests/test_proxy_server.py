@@ -517,6 +517,106 @@ async def test_complete(
         complete_callback.reset_mock()
 
 
+async def test_reload_mcp_in_tool_list() -> None:
+    """Test that reload_mcp appears in tool list when reload_callback is provided."""
+    server = Server("test-server")
+
+    @server.list_tools()  # type: ignore[no-untyped-call,misc]
+    async def _list() -> list[types.Tool]:
+        return [
+            types.Tool(
+                name="backend_tool",
+                description="A backend tool",
+                inputSchema=TOOL_INPUT_SCHEMA,
+            ),
+        ]
+
+    @server.call_tool()  # type: ignore[misc]
+    async def _call(name: str, arguments: dict[str, t.Any] | None) -> list[types.Content]:
+        return []
+
+    reload_callback = AsyncMock()
+
+    async with in_memory(server) as session:
+        wrapped_server = await create_proxy_server(session, reload_callback=reload_callback)
+        async with in_memory(wrapped_server) as wrapped_session:
+            await wrapped_session.initialize()
+            result = await wrapped_session.list_tools()
+            tool_names = [tool.name for tool in result.tools]
+            assert "backend_tool" in tool_names
+            assert "reload_mcp" in tool_names
+
+
+async def test_reload_mcp_without_backend_tools() -> None:
+    """Test that reload_mcp appears even when backend has no tools."""
+    server = Server("test-server")
+    reload_callback = AsyncMock()
+
+    async with in_memory(server) as session:
+        wrapped_server = await create_proxy_server(session, reload_callback=reload_callback)
+        async with in_memory(wrapped_server) as wrapped_session:
+            await wrapped_session.initialize()
+            result = await wrapped_session.list_tools()
+            assert len(result.tools) == 1
+            assert result.tools[0].name == "reload_mcp"
+
+
+async def test_reload_mcp_calls_callback() -> None:
+    """Test that calling reload_mcp invokes the callback and updates the session."""
+    server = Server("test-server")
+
+    @server.list_tools()  # type: ignore[no-untyped-call,misc]
+    async def _list() -> list[types.Tool]:
+        return [
+            types.Tool(name="tool1", description="desc", inputSchema=TOOL_INPUT_SCHEMA),
+        ]
+
+    @server.call_tool()  # type: ignore[misc]
+    async def _call(name: str, arguments: dict[str, t.Any] | None) -> list[types.Content]:
+        return []
+
+    new_session = AsyncMock(spec=ClientSession)
+    new_session.initialize = AsyncMock()
+    reload_callback = AsyncMock(return_value=new_session)
+
+    async with in_memory(server) as session:
+        wrapped_server = await create_proxy_server(session, reload_callback=reload_callback)
+        async with in_memory(wrapped_server) as wrapped_session:
+            await wrapped_session.initialize()
+            result = await wrapped_session.call_tool("reload_mcp", {})
+            assert not result.isError
+            assert isinstance(result.content[0], types.TextContent)
+            assert result.content[0].text == "Reloaded successfully"
+            reload_callback.assert_called_once()
+            new_session.initialize.assert_called_once()
+
+
+async def test_reload_mcp_error() -> None:
+    """Test that reload failure returns an error."""
+    server = Server("test-server")
+
+    @server.list_tools()  # type: ignore[no-untyped-call,misc]
+    async def _list() -> list[types.Tool]:
+        return [
+            types.Tool(name="tool1", description="desc", inputSchema=TOOL_INPUT_SCHEMA),
+        ]
+
+    @server.call_tool()  # type: ignore[misc]
+    async def _call(name: str, arguments: dict[str, t.Any] | None) -> list[types.Content]:
+        return []
+
+    reload_callback = AsyncMock(side_effect=RuntimeError("Reload failed"))
+
+    async with in_memory(server) as session:
+        wrapped_server = await create_proxy_server(session, reload_callback=reload_callback)
+        async with in_memory(wrapped_server) as wrapped_session:
+            await wrapped_session.initialize()
+            result = await wrapped_session.call_tool("reload_mcp", {})
+            assert result.isError
+            assert isinstance(result.content[0], types.TextContent)
+            assert "Reload failed" in result.content[0].text
+
+
 @pytest.mark.parametrize("tool_callback", [AsyncMock()])
 async def test_call_tool_with_error(
     session_generator: SessionContextManager,

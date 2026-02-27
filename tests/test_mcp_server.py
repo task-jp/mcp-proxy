@@ -221,18 +221,18 @@ def mock_stdio_params() -> StdioServerParameters:
 
 
 def setup_async_context_mocks() -> tuple[
-    contextlib.AbstractContextManager[tuple[AsyncMock, AsyncMock]],
-    contextlib.AbstractContextManager[tuple[AsyncMock, AsyncMock]],
+    AsyncMock,
     AsyncMock,
     MagicMock,
     list[MagicMock],
 ]:
     """Helper function to set up async context manager mocks."""
-    # Setup stdio client mock
-    mock_streams = (AsyncMock(), AsyncMock())
-
-    # Setup client session mock
+    # Setup SessionManager mock
     mock_session = AsyncMock()
+    mock_session_manager = AsyncMock()
+    mock_session_manager.start = AsyncMock(return_value=mock_session)
+    mock_session_manager.reload = AsyncMock(return_value=mock_session)
+    mock_session_manager.close = AsyncMock()
 
     # Setup HTTP manager mock
     mock_http_manager = MagicMock()
@@ -241,8 +241,7 @@ def setup_async_context_mocks() -> tuple[
     mock_routes = [MagicMock()]
 
     return (
-        contextlib.nullcontext(mock_streams),
-        contextlib.nullcontext(mock_session),
+        mock_session_manager,
         mock_session,
         mock_http_manager,
         mock_routes,
@@ -262,19 +261,17 @@ async def test_run_mcp_server_with_default_server(
 ) -> None:
     """Test run_mcp_server with a default server configuration."""
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("uvicorn.Server") as mock_uvicorn_server,
         patch("mcp_proxy.mcp_server.logger") as mock_logger,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -287,8 +284,12 @@ async def test_run_mcp_server_with_default_server(
         await run_mcp_server(mock_settings, mock_stdio_params, {})
 
         # Verify calls
-        mock_stdio_client.assert_called_once_with(mock_stdio_params)
-        mock_create_proxy.assert_called_once_with(mock_session)
+        mock_session_manager_cls.assert_called_once_with(mock_stdio_params)
+        mock_session_mgr.start.assert_called_once()
+        mock_create_proxy.assert_called_once_with(
+            mock_session,
+            reload_callback=mock_session_mgr.reload,
+        )
         mock_create_routes.assert_called_once_with(
             mock_proxy,
             stateless_instance=mock_settings.stateless,
@@ -317,19 +318,17 @@ async def test_run_mcp_server_with_named_servers(
     }
 
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("uvicorn.Server") as mock_uvicorn_server,
         patch("mcp_proxy.mcp_server.logger") as mock_logger,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -342,7 +341,7 @@ async def test_run_mcp_server_with_named_servers(
         await run_mcp_server(mock_settings, None, named_servers)
 
         # Verify calls
-        assert mock_stdio_client.call_count == 2
+        assert mock_session_manager_cls.call_count == 2
         assert mock_create_proxy.call_count == 2
         assert mock_create_routes.call_count == 2
 
@@ -374,19 +373,17 @@ async def test_run_mcp_server_with_cors_middleware(
     )
 
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("mcp_proxy.mcp_server.Starlette") as mock_starlette,
         patch("uvicorn.Server") as mock_uvicorn_server,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -418,19 +415,17 @@ async def test_run_mcp_server_debug_mode(
     )
 
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("mcp_proxy.mcp_server.Starlette") as mock_starlette,
         patch("uvicorn.Server") as mock_uvicorn_server,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -459,18 +454,16 @@ async def test_run_mcp_server_stateless_mode(
     )
 
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("uvicorn.Server") as mock_uvicorn_server,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -495,19 +488,17 @@ async def test_run_mcp_server_uvicorn_config(
 ) -> None:
     """Test run_mcp_server creates correct uvicorn configuration."""
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("uvicorn.Config") as mock_uvicorn_config,
         patch("uvicorn.Server") as mock_uvicorn_server,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -544,18 +535,16 @@ async def test_run_mcp_server_global_status_updates(
     named_servers = {"test_server": mock_stdio_params}
 
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("uvicorn.Server") as mock_uvicorn_server,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -582,19 +571,17 @@ async def test_run_mcp_server_sse_url_logging(
     named_servers = {"test_server": mock_stdio_params}
 
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("uvicorn.Server") as mock_uvicorn_server,
         patch("mcp_proxy.mcp_server.logger") as mock_logger,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -622,12 +609,9 @@ async def test_run_mcp_server_exception_handling(
     mock_stdio_params: StdioServerParameters,
 ) -> None:
     """Test run_mcp_server handles exceptions properly."""
-    with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession"),
-    ):
+    with patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls:
         # Setup mocks to raise an exception
-        mock_stdio_client.side_effect = Exception("Connection failed")
+        mock_session_manager_cls.side_effect = Exception("Connection failed")
 
         # Should not raise, function should handle exceptions gracefully
         try:
@@ -645,19 +629,17 @@ async def test_run_mcp_server_both_default_and_named_servers(
     named_servers = {"named_server": mock_stdio_params}
 
     with (
-        patch("mcp_proxy.mcp_server.stdio_client") as mock_stdio_client,
-        patch("mcp_proxy.mcp_server.ClientSession") as mock_client_session,
+        patch("mcp_proxy.mcp_server.SessionManager") as mock_session_manager_cls,
         patch("mcp_proxy.mcp_server.create_proxy_server") as mock_create_proxy,
         patch("mcp_proxy.mcp_server.create_single_instance_routes") as mock_create_routes,
         patch("uvicorn.Server") as mock_uvicorn_server,
         patch("mcp_proxy.mcp_server.logger") as mock_logger,
     ):
         # Setup mocks
-        mock_stdio_context, mock_session_context, mock_session, mock_http_manager, mock_routes = (
+        mock_session_mgr, mock_session, mock_http_manager, mock_routes = (
             setup_async_context_mocks()
         )
-        mock_stdio_client.return_value = mock_stdio_context
-        mock_client_session.return_value = mock_session_context
+        mock_session_manager_cls.return_value = mock_session_mgr
 
         mock_proxy = AsyncMock()
         mock_create_proxy.return_value = mock_proxy
@@ -670,7 +652,7 @@ async def test_run_mcp_server_both_default_and_named_servers(
         await run_mcp_server(mock_settings, mock_stdio_params, named_servers)
 
         # Verify both servers were set up
-        assert mock_stdio_client.call_count == 2  # One for default, one for named
+        assert mock_session_manager_cls.call_count == 2  # One for default, one for named
         assert mock_create_proxy.call_count == 2
         assert mock_create_routes.call_count == 2
 

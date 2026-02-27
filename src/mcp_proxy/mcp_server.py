@@ -8,8 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import uvicorn
-from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.stdio import StdioServerParameters
 from mcp.server import Server as MCPServerSDK  # Renamed to avoid conflict
 from mcp.server.sse import SseServerTransport
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -21,7 +20,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import BaseRoute, Mount, Route
 from starlette.types import Receive, Scope, Send
 
-from .proxy_server import create_proxy_server
+from .proxy_server import SessionManager, create_proxy_server
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +166,13 @@ async def run_mcp_server(
                 default_server_params.command,
                 " ".join(default_server_params.args),
             )
-            stdio_streams = await stack.enter_async_context(stdio_client(default_server_params))
-            session = await stack.enter_async_context(ClientSession(*stdio_streams))
-            proxy = await create_proxy_server(session)
+            session_mgr = SessionManager(default_server_params)
+            stack.push_async_callback(session_mgr.close)
+            session = await session_mgr.start()
+            proxy = await create_proxy_server(
+                session,
+                reload_callback=session_mgr.reload,
+            )
 
             instance_routes, http_manager = create_single_instance_routes(
                 proxy,
@@ -187,9 +190,13 @@ async def run_mcp_server(
                 params.command,
                 " ".join(params.args),
             )
-            stdio_streams_named = await stack.enter_async_context(stdio_client(params))
-            session_named = await stack.enter_async_context(ClientSession(*stdio_streams_named))
-            proxy_named = await create_proxy_server(session_named)
+            session_mgr_named = SessionManager(params)
+            stack.push_async_callback(session_mgr_named.close)
+            session_named = await session_mgr_named.start()
+            proxy_named = await create_proxy_server(
+                session_named,
+                reload_callback=session_mgr_named.reload,
+            )
 
             instance_routes_named, http_manager_named = create_single_instance_routes(
                 proxy_named,
