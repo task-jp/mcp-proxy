@@ -575,8 +575,12 @@ async def test_reload_mcp_calls_callback() -> None:
     async def _call(name: str, arguments: dict[str, t.Any] | None) -> list[types.Content]:
         return []
 
+    init_result = AsyncMock()
+    init_result.capabilities = types.ServerCapabilities(
+        tools=types.ToolsCapability(),
+    )
     new_session = AsyncMock(spec=ClientSession)
-    new_session.initialize = AsyncMock()
+    new_session.initialize = AsyncMock(return_value=init_result)
     reload_callback = AsyncMock(return_value=new_session)
 
     async with in_memory(server) as session:
@@ -589,6 +593,70 @@ async def test_reload_mcp_calls_callback() -> None:
             assert result.content[0].text == "Reloaded successfully"
             reload_callback.assert_called_once()
             new_session.initialize.assert_called_once()
+
+
+async def test_reload_mcp_sends_all_notifications() -> None:
+    """Test that reload sends tool/prompt/resource list changed notifications."""
+    server = Server("test-server")
+
+    @server.list_tools()  # type: ignore[no-untyped-call,misc]
+    async def _list() -> list[types.Tool]:
+        return [
+            types.Tool(name="tool1", description="desc", inputSchema=TOOL_INPUT_SCHEMA),
+        ]
+
+    @server.call_tool()  # type: ignore[misc]
+    async def _call(_name: str, _arguments: dict[str, t.Any] | None) -> list[types.Content]:
+        return []
+
+    init_result = AsyncMock()
+    init_result.capabilities = types.ServerCapabilities(
+        tools=types.ToolsCapability(),
+        prompts=types.PromptsCapability(),
+        resources=types.ResourcesCapability(),
+    )
+    new_session = AsyncMock(spec=ClientSession)
+    new_session.initialize = AsyncMock(return_value=init_result)
+    reload_callback = AsyncMock(return_value=new_session)
+
+    async with in_memory(server) as session:
+        wrapped_server = await create_proxy_server(session, reload_callback=reload_callback)
+        async with in_memory(wrapped_server) as wrapped_session:
+            await wrapped_session.initialize()
+            result = await wrapped_session.call_tool("reload_mcp", {})
+            assert not result.isError
+            assert isinstance(result.content[0], types.TextContent)
+            assert result.content[0].text == "Reloaded successfully"
+
+
+async def test_reload_mcp_no_notifications_without_capabilities() -> None:
+    """Test that reload sends no notifications when backend has no capabilities."""
+    server = Server("test-server")
+
+    @server.list_tools()  # type: ignore[no-untyped-call,misc]
+    async def _list() -> list[types.Tool]:
+        return [
+            types.Tool(name="tool1", description="desc", inputSchema=TOOL_INPUT_SCHEMA),
+        ]
+
+    @server.call_tool()  # type: ignore[misc]
+    async def _call(_name: str, _arguments: dict[str, t.Any] | None) -> list[types.Content]:
+        return []
+
+    init_result = AsyncMock()
+    init_result.capabilities = types.ServerCapabilities()
+    new_session = AsyncMock(spec=ClientSession)
+    new_session.initialize = AsyncMock(return_value=init_result)
+    reload_callback = AsyncMock(return_value=new_session)
+
+    async with in_memory(server) as session:
+        wrapped_server = await create_proxy_server(session, reload_callback=reload_callback)
+        async with in_memory(wrapped_server) as wrapped_session:
+            await wrapped_session.initialize()
+            result = await wrapped_session.call_tool("reload_mcp", {})
+            assert not result.isError
+            assert isinstance(result.content[0], types.TextContent)
+            assert result.content[0].text == "Reloaded successfully"
 
 
 async def test_reload_mcp_error() -> None:

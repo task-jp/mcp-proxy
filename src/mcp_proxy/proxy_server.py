@@ -140,8 +140,18 @@ async def create_proxy_server(  # noqa: C901, PLR0915
             if reload_callback and req.params.name == "reload_mcp":
                 try:
                     new_session = await reload_callback()
-                    await new_session.initialize()
+                    init_result = await new_session.initialize()
                     session_ref[0] = new_session
+
+                    new_caps = init_result.capabilities
+                    proxy_session = app.request_context.session
+                    if new_caps.tools:
+                        await proxy_session.send_tool_list_changed()
+                    if new_caps.prompts:
+                        await proxy_session.send_prompt_list_changed()
+                    if new_caps.resources:
+                        await proxy_session.send_resource_list_changed()
+
                     return types.ServerResult(
                         types.CallToolResult(
                             content=[
